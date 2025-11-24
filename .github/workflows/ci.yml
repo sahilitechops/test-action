@@ -18,6 +18,7 @@ on:
           - AWS_PROD_04
           - AWS_PROD_05
           - ubuntu-latest
+          - window-latest
 
       domain:
         description: "Comma-separated domain(s). Required."
