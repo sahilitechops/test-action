@@ -1,4 +1,4 @@
-name: "🚀 Manual Frontend Deploy (from Release ZIPs)"
+name: "🚀 Manual Frontend gemini"
 
 on:
   workflow_dispatch:
