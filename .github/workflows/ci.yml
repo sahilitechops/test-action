@@ -17,6 +17,7 @@ on:
           - AWS_PROD_03
           - AWS_PROD_04
           - AWS_PROD_05
+          - ubuntu-latest
 
       domain:
         description: "Comma-separated domain(s). Required."
