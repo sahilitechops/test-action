@@ -1,0 +1,171 @@
+name: "🚀 Manual Frontend Deploy (from Release ZIPs)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Select the self-hosted runner to deploy on"
+        required: true
+        type: choice
+        options:
+          - host24-frontend
+          - host24-backend
+          - AWS_Staging
+      domain:
+        description: "Enter the target domain (e.g., qa.arborgold.net)"
+        required: true
+      release_tag:
+        description: "Enter the GitHub Release tag (e.g., release/V10.0.3)"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ${{ fromJson('{"host24-frontend":["self-hosted","frontend"],"host24-backend":["self-hosted","backend"],"AWS_Staging":["self-hosted","AWS_Staging"]}')[github.event.inputs.runner] }}
+
+    steps:
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "⚙️ Ensure GitHub CLI Installed (ZIP fallback version)"
+        shell: pwsh
+        run: |
+          # Check if gh is already available
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            Write-Host "📦 GitHub CLI not found. Installing via ZIP..."
+      
+            # Define version and temp path
+            $version = "2.56.0"
+            $zipUrl = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
+            $zipPath = "$env:TEMP\ghcli.zip"
+            $extractPath = "$env:ProgramData\ghcli"
+      
+            # Clean up old files
+            if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }
+            if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+      
+            # Download and extract
+            Write-Host "⬇️ Downloading GitHub CLI v$version from $zipUrl"
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+      
+            # Find gh.exe
+            $ghExe = Get-ChildItem -Path $extractPath -Filter gh.exe -Recurse | Select-Object -First 1
+            if (-not $ghExe) {
+              Write-Error "❌ Failed to locate gh.exe after extraction!"
+              exit 1
+            }
+      
+            # Persist path for future steps
+            $ghDir = $ghExe.DirectoryName
+            echo "$ghDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            Write-Host "✅ GitHub CLI extracted and available globally at: $ghDir"
+      
+            # ✅ Validate install using full path (not gh alias)
+            & "$($ghExe.FullName)" --version
+          } else {
+            $ver = (gh --version | Select-String "gh version").ToString()
+            Write-Host "✅ GitHub CLI already installed: $ver"
+          }
+
+
+      - name: "🧾 Download all ZIP assets from GitHub Release (via gh CLI)"
+        id: download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.event.inputs.release_tag }}"
+          Write-Host "📥 Downloading assets for release: $tag ..."
+          gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip"
+          $downloadDir = "$PWD\release_zips"
+          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+          New-Item -ItemType Directory -Path $downloadDir | Out-Null
+          Move-Item *.zip $downloadDir -Force
+          $count = (Get-ChildItem -Path $downloadDir -Filter *.zip).Count
+          if ($count -eq 0) {
+            Write-Error "❌ No ZIP assets found for release $tag"
+            exit 1
+          }
+          Write-Host "✅ Downloaded $count ZIP file(s) to $downloadDir"
+          echo "download_dir=$downloadDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: "📦 Extract all ZIPs"
+        id: extract
+        shell: pwsh
+        run: |
+          $source = "${{ steps.download.outputs.download_dir }}"
+          $extractRoot = "$PWD\deploy"
+          if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+          New-Item -ItemType Directory -Path $extractRoot | Out-Null
+          $zips = Get-ChildItem -Path $source -Filter *.zip
+          foreach ($zip in $zips) {
+            $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
+            $dest = Join-Path $extractRoot $folderName
+            Write-Host "📦 Extracting $($zip.Name) → $dest"
+            Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
+          }
+          Write-Host "✅ Extracted all ZIPs into $extractRoot"
+          echo "extract_root=$extractRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: "🚀 Deploy to IIS Domain"
+        id: deploy
+        shell: pwsh
+        run: |
+          $domain = "${{ github.event.inputs.domain }}"
+          $deployHost = "${{ github.event.inputs.runner }}"
+          $root = "${{ steps.extract.outputs.extract_root }}"
+          $deployMap = @{
+            "ag-app"              = "AG"
+            "web-arborgold-crew"  = "Crew"
+            "e-proposal"          = "EProposal"
+            "e-invoice"           = "EInvoice"
+            "e-statement"         = "EStatement"
+          }
+
+          Write-Host "==============================="
+          Write-Host "🚀 DEPLOYMENT STARTED"
+          Write-Host "🌍 Host: $deployHost"
+          Write-Host "🔹 Domain: $domain"
+          Write-Host "==============================="
+
+          if (-Not (Test-Path $root)) {
+            Write-Error "❌ Extracted source not found: $root"
+            exit 1
+          }
+
+          foreach ($key in $deployMap.Keys) {
+            $fullPath = "${{ github.event.inputs.release_tag }}-$key"
+            $src = Join-Path $root $fullPath
+            $target = "D:\inetpub\vhosts\$domain\httpdocs\$($deployMap[$key])"
+            if (-not (Test-Path $target) ) {
+              Write-Warning "⚠️ Missing folder for $target — skipping"
+              continue
+            }
+
+            if (-not (Test-Path $src) ) {
+              Write-Warning "⚠️ Missing folder for $src — skipping"
+              continue
+            }
+            $target = "D:\inetpub\vhosts\$domain\httpdocs\$($deployMap[$key])"
+            Write-Host "📂 Target: $target"
+            if (-not (Test-Path $target)) {
+              Write-Host "📁 Creating directory $target ..."
+              New-Item -ItemType Directory -Force -Path $target | Out-Null
+            }
+            Write-Host "🚚 Copying $key → $target ..."
+            Copy-Item "$src\*" -Destination $target -Recurse -Force
+            Write-Host "✅ $key deployed successfully."
+          }
+
+          Write-Host "🎉 Deployment to $domain completed successfully!"
+          echo "status=✅ Success" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: "🧹 Cleanup temporary files"
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$PWD\release_zips") { Remove-Item -Recurse -Force "$PWD\release_zips" }
+          if (Test-Path "$PWD\deploy") { Remove-Item -Recurse -Force "$PWD\deploy" }
+          Write-Host "🧹 Cleaned up temporary files"
