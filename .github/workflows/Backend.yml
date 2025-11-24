@@ -17,8 +17,6 @@ on:
           - AWS_PROD_03
           - AWS_PROD_04
           - AWS_PROD_05
-          - ubuntu-latest
-          - window-latest
 
       domain:
         description: "Comma-separated domain(s). Required."
@@ -142,15 +140,18 @@ jobs:
           $failed=@()
 
           # --------------------------
-          # CHECK INPUTS
+          # REQUIRE DOMAIN INPUT
           # --------------------------
           if ([string]::IsNullOrWhiteSpace($rawDomains)) {
             Write-Host "❌ ERROR: No domain provided."
+            Write-Host "⛔ Deployment aborted. Domain input is REQUIRED."
             exit 0
           }
 
+          # Domain list
           $domains=$rawDomains.Split(",") | ForEach-Object { $_.Trim() }
 
+          # Manual Exclude
           if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
             $exclude=$rawExclude.Split(",") | ForEach-Object { $_.Trim() }
             Write-Host "🚫 Manual Exclude: $($exclude -join ', ')"
@@ -162,69 +163,80 @@ jobs:
             exit 0
           }
 
+          Write-Host "🔹 Final Deployment Domains: $($domains -join ', ')"
+
           # --------------------------
           # DEPLOY LOOP
           # --------------------------
           foreach ($domain in $domains) {
+
             Write-Host "`n===================================="
             Write-Host "🚀 Deploying to $domain"
             Write-Host "====================================`n"
 
             $pool=$domain
-            $frontendPath="D:\inetpub\vhosts\$domain\httpdocs"
-            $backendPath="D:\inetpub\vhosts\$domain\httpdocs\AG"
 
-            # 1. Stop AppPool
+            # Stop AppPool pre-deployment
             if ($restart -eq "true") {
-              if (Test-Path "IIS:\AppPools\$pool") { Stop-WebAppPool $pool }
+              if (Test-Path "IIS:\AppPools\$pool") {
+                Stop-WebAppPool $pool
+              }
             }
 
             try {
-              # 2. FRONTEND DEPLOYMENT (httpdocs)
-              if ($type -eq "frontend" -or $type -eq "both") {
-                Write-Host "📂 Deploying FRONTEND to: $frontendPath"
+              # Determine targets
+              $targets=@()
 
-                if (-not (Test-Path $frontendPath)) {
-                  New-Item -ItemType Directory -Path $frontendPath -Force | Out-Null
+              switch ($type) {
+                "frontend" { $targets+="D:\inetpub\vhosts\$domain\httpdocs" }
+                "backend"  { $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG" }
+                "both"     {
+                  $targets+="D:\inetpub\vhosts\$domain\httpdocs"
+                  $targets+="D:\inetpub\vhosts\$domain\httpdocs\AG"
                 }
-
-                # OPTIONAL: Exclude 'AG' folder or dlls if source is mixed to keep root clean
-                # Remove '-Exclude ...' if you want strictly everything copied
-                Copy-Item "$source\*" $frontendPath -Recurse -Force -ErrorAction Stop -Exclude "AG"
               }
 
-              # 3. BACKEND DEPLOYMENT (httpdocs\AG)
-              if ($type -eq "backend" -or $type -eq "both") {
-                Write-Host "📂 Deploying BACKEND to: $backendPath"
+              foreach ($target in $targets) {
+                Write-Host "📂 Deploying to $target"
 
-                if (-not (Test-Path $backendPath)) {
-                  New-Item -ItemType Directory -Path $backendPath -Force | Out-Null
+                if (-not (Test-Path $target)) {
+                  New-Item -ItemType Directory -Path $target -Force | Out-Null
                 }
 
-                Copy-Item "$source\*" $backendPath -Recurse -Force -ErrorAction Stop
+                Write-Host "🚚 Copying..."
+                Copy-Item "$source\*" $target -Recurse -Force -ErrorAction Stop
               }
 
-              # 4. Start AppPool (Immediate recovery)
-              if (Test-Path "IIS:\AppPools\$pool") { Start-WebAppPool $pool }
+              # Start AppPool
+              if (Test-Path "IIS:\AppPools\$pool") {
+                Start-WebAppPool $pool
+              }
+
               $success+=$domain
-
-            } catch {
+            }
+            catch {
               Write-Host "❌ ERROR deploying to $domain"
               Write-Host "⚠️ $_"
-              
-              # Recover AppPool on failure
-              if (Test-Path "IIS:\AppPools\$pool") { Start-WebAppPool $pool }
+
+              # Recover AppPool
+              if (Test-Path "IIS:\AppPools\$pool") {
+                Start-WebAppPool $pool
+              }
+
               $failed+=$domain
+              continue
             }
 
-            # 5. Ensure Start (redundant check for restart flag)
+            # Restart AppPool after deployment (if enabled)
             if ($restart -eq "true") {
-               if ((Get-WebAppPoolState $pool).Value -ne "Started") { Start-WebAppPool $pool }
+              if (Test-Path "IIS:\AppPools\$pool") {
+                Start-WebAppPool $pool
+              }
             }
           }
 
           # --------------------------
-          # GLOBAL IIS RESTART
+          # FULL IIS RESTART
           # --------------------------
           if ($restart -eq "true") {
             Write-Host "🔄 Restarting IIS globally..."
@@ -237,8 +249,12 @@ jobs:
           Write-Host "`n===================================="
           Write-Host "📄 DEPLOYMENT SUMMARY"
           Write-Host "===================================="
-          Write-Host "✅ Successful: $(if($success){$success -join ','}else{'None'})"
-          Write-Host "❌ Failed: $(if($failed){$failed -join ','}else{'None'})"
+
+          Write-Host "`n✅ Successful:"
+          if ($success.Count -gt 0) { Write-Host ($success -join ', ') } else { Write-Host "None" }
+
+          Write-Host "`n❌ Failed:"
+          if ($failed.Count -gt 0) { Write-Host ($failed -join ', ') } else { Write-Host "None" }
 
           echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT
           echo "failed_domains=$($failed -join ',')" >> $env:GITHUB_OUTPUT
