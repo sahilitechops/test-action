@@ -7,9 +7,9 @@ on:
         description: "Select your runner"
         required: true
         type: choice
-        default: "DESKTOP-IUAAE04"   # 👈 Default to your machine
+        default: "DESKTOP-IUAAE04"
         options:
-          - DESKTOP-IUAAE04          # 👈 Added your specific runner name
+          - DESKTOP-IUAAE04
           - host24-frontend
           - host24-backend
       domain:
@@ -25,9 +25,6 @@ permissions:
 
 jobs:
   deploy:
-    # 👇 UPDATED LOGIC:
-    # If you pick "DESKTOP-IUAAE04", it looks for labels ["self-hosted", "Windows"]
-    # which matches the screenshot you sent.
     runs-on: ${{ fromJson('{"DESKTOP-IUAAE04":["self-hosted","Windows"],"host24-frontend":["self-hosted","frontend"],"host24-backend":["self-hosted","backend"]}')[github.event.inputs.runner] }}
 
     steps:
@@ -35,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: "⚙️ Ensure GitHub CLI Installed"
-        shell: powershell
+        shell: powershell   # 👈 FIXED: Uses standard Windows PowerShell
         run: |
           if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
             Write-Host "📦 GitHub CLI not found. Installing..."
@@ -43,8 +40,13 @@ jobs:
             $zipUrl = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
             $zipPath = "$env:TEMP\ghcli.zip"
             $extractPath = "$env:ProgramData\ghcli"
+            
             if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }
+            
+            # Force TLS 1.2 for older Windows PowerShell
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
+            
             Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
             $ghExe = Get-ChildItem -Path $extractPath -Filter gh.exe -Recurse | Select-Object -First 1
             echo "$($ghExe.DirectoryName)" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -53,7 +55,7 @@ jobs:
           }
 
       - name: "🧾 Download ZIPs"
-        shell: powershell
+        shell: powershell   # 👈 FIXED
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -62,6 +64,8 @@ jobs:
           $downloadDir = "$PWD\release_zips"
           if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
           New-Item -ItemType Directory -Path $downloadDir | Out-Null
+          
+          # Using gh directly (assumes it's in path or installed above)
           gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --dir $downloadDir
           
           $count = (Get-ChildItem -Path $downloadDir -Filter *.zip).Count
@@ -70,7 +74,7 @@ jobs:
 
       - name: "📦 Extract ZIPs"
         id: extract
-        shell: powershell
+        shell: powershell   # 👈 FIXED
         run: |
           $source = "${{ steps.download.outputs.download_dir }}"
           $extractRoot = "$PWD\deploy"
@@ -79,24 +83,22 @@ jobs:
           
           $zips = Get-ChildItem -Path $source -Filter *.zip
           foreach ($zip in $zips) {
-            # Safe extraction logic for local test
             $dest = Join-Path $extractRoot $zip.BaseName
             Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
           }
           echo "extract_root=$extractRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: "🚀 Local Deployment (Safe Mode)"
-        shell: powershell
+        shell: powershell   # 👈 FIXED
         run: |
           $domain = "${{ github.event.inputs.domain }}"
           $root = "${{ steps.extract.outputs.extract_root }}"
           
-          # 👇 SAFE TARGET: Uses C:\Temp instead of D:\inetpub
+          # Safe target for local test
           $baseTarget = "C:\Temp\DeployTest\$domain"
 
           Write-Host "==============================="
           Write-Host "🚀 DEPLOYING TO: $baseTarget"
-          Write-Host "💻 RUNNER: ${{ github.event.inputs.runner }}"
           Write-Host "==============================="
 
           if (-Not (Test-Path $root)) { Write-Error "❌ Source not found"; exit 1 }
@@ -109,12 +111,11 @@ jobs:
              Write-Host "🚚 Copying $($folder.Name)..."
              Copy-Item "$($folder.FullName)\*" -Destination $targetPath -Recurse -Force
           }
-
           Write-Host "✅ Success! Files are in C:\Temp\DeployTest\$domain"
 
       - name: "🧹 Cleanup"
         if: always()
-        shell: powershell
+        shell: powershell   # 👈 FIXED
         run: |
           Remove-Item "$PWD\release_zips" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item "$PWD\deploy" -Recurse -Force -ErrorAction SilentlyContinue
