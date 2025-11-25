@@ -57,65 +57,65 @@ jobs:
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
 
-      - name: "⚙️ Ensure GitHub CLI Installed"
-        shell: powershell
-        run: |
-          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            Write-Host "📦 Installing GitHub CLI..."
-            $version = "2.56.0"
-            $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
-            $zip = "$env:TEMP\ghcli.zip"
-            $dest = "$env:ProgramData\ghcli"
-            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-            Invoke-WebRequest -Uri $url -OutFile $zip
-            Expand-Archive $zip $dest -Force
-            $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
-            echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
-            & "$($exe.FullName)" --version
-          } else {
-            Write-Host "✅ GH CLI exists"
-          }
+      # - name: "⚙️ Ensure GitHub CLI Installed"
+      #   shell: powershell
+      #   run: |
+      #     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+      #       Write-Host "📦 Installing GitHub CLI..."
+      #       $version = "2.56.0"
+      #       $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
+      #       $zip = "$env:TEMP\ghcli.zip"
+      #       $dest = "$env:ProgramData\ghcli"
+      #       if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+      #       Invoke-WebRequest -Uri $url -OutFile $zip
+      #       Expand-Archive $zip $dest -Force
+      #       $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
+      #       echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
+      #       & "$($exe.FullName)" --version
+      #     } else {
+      #       Write-Host "✅ GH CLI exists"
+      #     }
 
-      - name: "🧾 Download ZIP Assets"
-        id: download
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag="${{ github.event.inputs.release_tag }}"
-          Write-Host "📥 Downloading Release ZIPs for $tag..."
-          gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
+      # - name: "🧾 Download ZIP Assets"
+      #   id: download
+      #   shell: powershell
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     $tag="${{ github.event.inputs.release_tag }}"
+      #     Write-Host "📥 Downloading Release ZIPs for $tag..."
+      #     gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
 
-          $downloadDir="$PWD/release_zips"
-          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-          New-Item -ItemType Directory -Path $downloadDir | Out-Null
-          Move-Item *.zip $downloadDir -Force
+      #     $downloadDir="$PWD/release_zips"
+      #     if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+      #     New-Item -ItemType Directory -Path $downloadDir | Out-Null
+      #     Move-Item *.zip $downloadDir -Force
 
-          $count=(Get-ChildItem $downloadDir "*.zip").Count
-          if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
-          echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
+      #     $count=(Get-ChildItem $downloadDir "*.zip").Count
+      #     if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
+      #     echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
 
-      - name: "📦 Extract ZIPs (Separately)"
-        id: extract
-        shell: powershell
-        run: |
-          $src = "${{ steps.download.outputs.download_dir }}"
-          $extractRoot = "$PWD\deploy"
+      # - name: "📦 Extract ZIPs (Separately)"
+      #   id: extract
+      #   shell: powershell
+      #   run: |
+      #     $src = "${{ steps.download.outputs.download_dir }}"
+      #     $extractRoot = "$PWD\deploy"
           
-          if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
-          New-Item -ItemType Directory -Path $extractRoot | Out-Null
+      #     if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+      #     New-Item -ItemType Directory -Path $extractRoot | Out-Null
 
-          $zips = Get-ChildItem -Path $src -Filter *.zip
-          foreach ($zip in $zips) {
-            $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
-            if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = $zip.BaseName }
-            $dest = Join-Path $extractRoot $folderName
-            Write-Host "📦 Extracting $($zip.Name) → $dest"
-            Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
-          }
+      #     $zips = Get-ChildItem -Path $src -Filter *.zip
+      #     foreach ($zip in $zips) {
+      #       $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
+      #       if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = $zip.BaseName }
+      #       $dest = Join-Path $extractRoot $folderName
+      #       Write-Host "📦 Extracting $($zip.Name) → $dest"
+      #       Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
+      #     }
 
-          Write-Host "✅ Extracted all ZIPs into $extractRoot"
-          echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
+      #     Write-Host "✅ Extracted all ZIPs into $extractRoot"
+      #     echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
       - name: "🚀 Deploy to Domain(s)"
         id: deploy
