@@ -1,0 +1,246 @@
+name: "🚚 Manual Backend Deploy (from Release ZIP)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "Select target host / runner"
+        required: true
+        type: choice
+        options:
+          - host24-backend
+          - host24-frontend
+          - host24-zip
+          - DESKTOP-IUAAE04       # <--- Added Here
+          - AWS_Staging
+          - AWS_PROD_01
+          - AWS_PROD_02
+          - AWS_PROD_03
+          - AWS_PROD_04
+          - AWS_PROD_05
+
+      domain:
+        description: "Comma-separated domain(s). Required."
+        required: true
+
+      exclude_domains:
+        description: "Comma-separated domains to exclude manually"
+        required: false
+
+      restart_iis:
+        description: "Restart IIS before & after Deployment?"
+        required: false
+        type: boolean
+        default: false
+
+      app_type:
+        description: "Deployment Type"
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+          - both
+
+      release_tag:
+        description: "GitHub Release tag (e.g., release/V10.0.3)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # Added "DESKTOP-IUAAE04" to the JSON mapping below
+    runs-on: ${{ fromJson('{"host24-backend":["self-hosted","Windows","X64","host24","backend"],"host24-frontend":["self-hosted","Windows","X64","host24","frontend"],"host24-zip":["self-hosted","Windows","X64","host24","zip"],"DESKTOP-IUAAE04":["self-hosted","Windows","X64","DESKTOP-IUAAE04"],"AWS_Staging":["self-hosted","Windows","X64","AWS_Staging"],"AWS_PROD_01":["self-hosted","Windows","X64","AWS_PROD_01"],"AWS_PROD_02":["self-hosted","Windows","X64","AWS_PROD_02"],"AWS_PROD_03":["self-hosted","Windows","X64","AWS_PROD_03"],"AWS_PROD_04":["self-hosted","Windows","X64","AWS_PROD_04"],"AWS_PROD_05":["self-hosted","Windows","X64","AWS_PROD_05"]}')[github.event.inputs.host] }}
+    steps:
+
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+
+      - name: "⚙️ Ensure GitHub CLI Installed"
+        shell: pwsh
+        run: |
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            Write-Host "📦 Installing GitHub CLI..."
+            $version = "2.56.0"
+            $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
+            $zip = "$env:TEMP\ghcli.zip"
+            $dest = "$env:ProgramData\ghcli"
+            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            Expand-Archive $zip $dest -Force
+            $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
+            echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
+            & "$($exe.FullName)" --version
+          } else {
+            Write-Host "✅ GH CLI exists"
+          }
+
+      - name: "🧾 Download ZIP Assets"
+        id: download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag="${{ github.event.inputs.release_tag }}"
+          Write-Host "📥 Downloading Release ZIPs for $tag..."
+          gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
+
+          $downloadDir="$PWD/release_zips"
+          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+          New-Item -ItemType Directory -Path $downloadDir | Out-Null
+          Move-Item *.zip $downloadDir -Force
+
+          $count=(Get-ChildItem $downloadDir "*.zip").Count
+          if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
+          echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
+
+      - name: "📦 Extract ZIPs (Separately)"
+        id: extract
+        shell: pwsh
+        run: |
+          $src = "${{ steps.download.outputs.download_dir }}"
+          $extractRoot = "$PWD\deploy"
+          
+          # Clean previous
+          if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+          New-Item -ItemType Directory -Path $extractRoot | Out-Null
+
+          # Extract each ZIP into its own folder (Using logic from Frontend.yml)
+          $zips = Get-ChildItem -Path $src -Filter *.zip
+          foreach ($zip in $zips) {
+            # Clean the folder name (remove release-V... prefix)
+            $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
+            
+            # If the zip doesn't have the prefix, just use the BaseName
+            if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = $zip.BaseName }
+
+            $dest = Join-Path $extractRoot $folderName
+            Write-Host "📦 Extracting $($zip.Name) → $dest"
+            Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
+          }
+
+          Write-Host "✅ Extracted all ZIPs into $extractRoot"
+          echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
+
+      - name: "🚀 Deploy to Domain(s)"
+        id: deploy
+        shell: pwsh
+        run: |
+          Import-Module WebAdministration
+
+          $rawDomains = "${{ github.event.inputs.domain }}"
+          $rawExclude = "${{ github.event.inputs.exclude_domains }}"
+          $restart    = "${{ github.event.inputs.restart_iis }}"
+          $type       = "${{ github.event.inputs.app_type }}"
+          $root       = "${{ steps.extract.outputs.extract_root }}"
+
+          # Define logic for where things go
+          # Keys match the extracted folder names. Values match the destination subfolder in httpdocs.
+          $deployMap = @{
+            "ag-app"              = "AG"
+            "web-arborgold-crew"  = "Crew"
+            "e-proposal"          = "EProposal"
+            "e-invoice"           = "EInvoice"
+            "e-statement"         = "EStatement"
+          }
+
+          # --------------------------
+          # VALIDATION
+          # --------------------------
+          if ([string]::IsNullOrWhiteSpace($rawDomains)) {
+             Write-Error "❌ ERROR: No domain provided."; exit 1 
+          }
+
+          $domains = $rawDomains.Split(",") | ForEach-Object { $_.Trim() }
+          if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
+            $exclude = $rawExclude.Split(",") | ForEach-Object { $_.Trim() }
+            $domains = $domains | Where-Object { $exclude -notcontains $_ }
+          }
+
+          if ($domains.Count -eq 0) { Write-Host "⚠️ No domains to deploy."; exit 0 }
+
+          $success = @(); $failed = @()
+
+          # --------------------------
+          # DEPLOY LOOP
+          # --------------------------
+          foreach ($domain in $domains) {
+            Write-Host "`n🚀 Deploying to $domain"
+            $pool = $domain
+            $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
+
+            # 1. Stop Pool
+            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { Stop-WebAppPool $pool }
+
+            try {
+              # Get all extracted folders
+              $extractedFolders = Get-ChildItem -Path $root -Directory
+
+              foreach ($folder in $extractedFolders) {
+                $folderName = $folder.Name
+                $targetSubFolder = ""
+                $shouldDeploy = $false
+
+                # --- LOGIC: Determine Target and if we should deploy based on app_type ---
+
+                if ($deployMap.ContainsKey($folderName)) {
+                   # === THIS IS A FRONTEND FOLDER ===
+                   $targetSubFolder = $deployMap[$folderName]
+                   
+                   if ($type -eq "frontend" -or $type -eq "both") {
+                     $shouldDeploy = $true
+                   } else {
+                     Write-Host "⏭️ Skipping Frontend artifact: $folderName (Type is $type)"
+                   }
+                }
+                else {
+                   # === THIS IS (PRESUMABLY) THE BACKEND FOLDER ===
+                   # Logic: If it's not in the map, it's likely the backend ZIP content
+                   # Backend usually goes to AG
+                   $targetSubFolder = "AG"
+                   
+                   if ($type -eq "backend" -or $type -eq "both") {
+                     $shouldDeploy = $true
+                     Write-Host "ℹ️ Identified '$folderName' as Backend artifact."
+                   } else {
+                     Write-Host "⏭️ Skipping Backend artifact: $folderName (Type is $type)"
+                   }
+                }
+
+                # --- EXECUTE COPY ---
+                if ($shouldDeploy) {
+                   $finalDest = Join-Path $httpdocs $targetSubFolder
+                   
+                   Write-Host "📂 Deploying [$folderName] → [$finalDest]"
+                   
+                   if (-not (Test-Path $finalDest)) { New-Item -ItemType Directory -Path $finalDest -Force | Out-Null }
+                   
+                   Copy-Item "$($folder.FullName)\*" -Destination $finalDest -Recurse -Force -ErrorAction Stop
+                }
+              }
+              
+              $success += $domain
+            }
+            catch {
+              Write-Error "❌ Failed $domain: $_"
+              $failed += $domain
+            }
+
+            # 2. Start Pool
+            if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
+                Start-WebAppPool $pool 
+            }
+          }
+
+          # Full Restart if requested
+          if ($restart -eq "true") { iisreset /restart }
+
+          echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT
+      - name: "🧹 Cleanup"
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item "$PWD/release_zips" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
