@@ -224,7 +224,7 @@ jobs:
               $success += $domain
             }
             catch {
-              Write-Error "❌ Failed $domain: $_"
+              Write-Error "❌ Failed $($domain): $_"
               $failed += $domain
             }
 
