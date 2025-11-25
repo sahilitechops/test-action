@@ -122,113 +122,115 @@ jobs:
         shell: powershell
         run: |
           # ---------------------------------------------------
-          # 1. SETUP & INPUTS
-          # ---------------------------------------------------
-          Import-Module WebAdministration
-          $ErrorActionPreference = "Stop"
+         # ---------------------------------------------------
+# 1. SETUP & INPUTS
+# ---------------------------------------------------
+Import-Module WebAdministration
+$ErrorActionPreference = "Stop"
 
-          $rawDomains = "${{ github.event.inputs.domain }}"
-          $rawExclude = "${{ github.event.inputs.exclude_domains }}"
-          $restart    = "${{ github.event.inputs.restart_iis }}"
-          $type       = "${{ github.event.inputs.app_type }}"
-          $root       = "${{ steps.extract.outputs.extract_root }}"
+$rawDomains = "${{ github.event.inputs.domain }}"
+$rawExclude = "${{ github.event.inputs.exclude_domains }}"
+$restart    = "${{ github.event.inputs.restart_iis }}"
+$type       = "${{ github.event.inputs.app_type }}"
+$root       = "${{ steps.extract.outputs.extract_root }}"
 
-          $deployMap = @{
-            "ag-app"             = "AG"
-            "web-arborgold-crew" = "Crew"
-            "e-proposal"         = "EProposal"
-            "e-invoice"          = "EInvoice"
-            "e-statement"        = "EStatement"
-          }
+$deployMap = @{
+  "ag-app"             = "AG"
+  "web-arborgold-crew" = "Crew"
+  "e-proposal"         = "EProposal"
+  "e-invoice"          = "EInvoice"
+  "e-statement"        = "EStatement"
+}
 
-          # ---------------------------------------------------
-          # 2. VALIDATE DOMAINS
-          # ---------------------------------------------------
-          if ([string]::IsNullOrWhiteSpace($rawDomains)) { Write-Error "❌ ERROR: No domain provided."; exit 1 }
+# ---------------------------------------------------
+# 2. VALIDATE DOMAINS
+# ---------------------------------------------------
+if ([string]::IsNullOrWhiteSpace($rawDomains)) { 
+  Write-Error "❌ ERROR: No domain provided."
+  exit 1 
+}
 
-          $domains = $rawDomains.Split(",") | ForEach-Object { $_.Trim() }
-          if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
-            $exclude = $rawExclude.Split(",") | ForEach-Object { $_.Trim() }
-            $domains = $domains | Where-Object { $exclude -notcontains $_ }
-          }
+$domains = $rawDomains.Split(",") | ForEach-Object { $_.Trim() }
+if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
+  $exclude = $rawExclude.Split(",") | ForEach-Object { $_.Trim() }
+  $domains = $domains | Where-Object { $exclude -notcontains $_ }
+}
 
-          if ($domains.Count -eq 0) { Write-Host "⚠️ No domains to deploy."; exit 0 }
+if ($domains.Count -eq 0) { 
+  Write-Host "⚠️ No domains to deploy."
+  exit 0 
+}
 
-          $success = @()
-          $failed = @()
+$success = @()
+$failed = @()
 
-          # ---------------------------------------------------
-          # 3. MAIN DEPLOYMENT LOOP
-          # ---------------------------------------------------
-          foreach ($domain in $domains) {
-            Write-Host "`n🚀 DEPLOYING TO: $domain"
-            $pool = $domain
-            $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
+# ---------------------------------------------------
+# 3. MAIN DEPLOYMENT LOOP
+# ---------------------------------------------------
+foreach ($domain in $domains) {
+  Write-Host "`n🚀 DEPLOYING TO: $domain"
+  $pool = $domain
+  $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
 
-            # Stop IIS Pool
-            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { 
-                Write-Host "🛑 Stopping AppPool..."
-                Stop-WebAppPool $pool 
-            }
+  # Stop IIS Pool
+  if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { 
+    Write-Host "🛑 Stopping AppPool..."
+    Stop-WebAppPool $pool 
+  }
 
-            # --- TRY BLOCK START ---
-            try {
-              $extractedFolders = Get-ChildItem -Path $root -Directory
-              
-              foreach ($folder in $extractedFolders) {
-                $folderName = $folder.Name
-                $targetSubFolder = ""
-                $shouldDeploy = $false
+  try {
+    $extractedFolders = Get-ChildItem -Path $root -Directory
+    foreach ($folder in $extractedFolders) {
+      $folderName = $folder.Name
+      $targetSubFolder = ""
+      $shouldDeploy = $false
 
-                if ($deployMap.ContainsKey($folderName)) {
-                   # It is a Frontend App
-                   $targetSubFolder = $deployMap[$folderName]
-                   if ($type -eq "frontend" -or $type -eq "both") { $shouldDeploy = $true }
-                } 
-                else {
-                   # It is likely Backend (AG)
-                   $targetSubFolder = "AG"
-                   if ($type -eq "backend" -or $type -eq "both") { $shouldDeploy = $true }
-                }
+      if ($deployMap.ContainsKey($folderName)) {
+        # It is a Frontend App
+        $targetSubFolder = $deployMap[$folderName]
+        if ($type -eq "frontend" -or $type -eq "both") { $shouldDeploy = $true }
+      } else {
+        # It is likely Backend (AG)
+        $targetSubFolder = "AG"
+        if ($type -eq "backend" -or $type -eq "both") { $shouldDeploy = $true }
+      }
 
-                if ($shouldDeploy) {
-                   $finalDest = Join-Path $httpdocs $targetSubFolder
-                   Write-Host "📂 Copying $folderName -> $finalDest"
-                   
-                   if (-not (Test-Path $finalDest)) { New-Item -ItemType Directory -Path $finalDest -Force | Out-Null }
-                   Copy-Item "$($folder.FullName)\*" -Destination $finalDest -Recurse -Force
-                }
-              }
-              $success += $domain
-            }
-            catch {
-              Write-Host "❌ ERROR on $domain"
-              Write-Error $_
-              $failed += $domain
-            }
-            # --- TRY BLOCK END ---
+      if ($shouldDeploy) {
+        $finalDest = Join-Path $httpdocs $targetSubFolder
+        Write-Host "📂 Copying $folderName -> $finalDest"
+        if (-not (Test-Path $finalDest)) { 
+          New-Item -ItemType Directory -Path $finalDest -Force | Out-Null 
+        }
+        Copy-Item "$($folder.FullName)\*" -Destination $finalDest -Recurse -Force
+      }
+    }
+    $success += $domain
+  }
+  catch {
+    Write-Host "❌ ERROR on $domain"
+    Write-Error $_
+    $failed += $domain
+  }
 
-            # Start IIS Pool
-            if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
-                Write-Host "▶️ Starting AppPool..."
-                Start-WebAppPool $pool 
-            }
-          } 
-          # --- FOREACH END ---
+  # Start IIS Pool
+  if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
+    Write-Host "▶️ Starting AppPool..."
+    Start-WebAppPool $pool 
+  }
+} # End foreach $domain
 
-          # ---------------------------------------------------
-          # 4. FINISH
-          # ---------------------------------------------------
-          if ($restart -eq "true") { 
-             Write-Host "🔄 Global IIS Reset..."
-             iisreset /restart 
-          }
+# ---------------------------------------------------
+# 4. FINISH
+# ---------------------------------------------------
+if ($restart -eq "true") { 
+  Write-Host "🔄 Global IIS Reset..."
+  iisreset /restart 
+}
 
-          Write-Host "✅ Success: $($success -join ', ')"
-          Write-Host "❌ Failed: $($failed -join ', ')"
+Write-Host "✅ Success: $($success -join ', ')"
+Write-Host "❌ Failed: $($failed -join ', ')"
 
-          echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT
-      - name: "🧹 Cleanup"
+echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT      - name: "🧹 Cleanup"
         if: always()
         shell: powershell
         run: |
