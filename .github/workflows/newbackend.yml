@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Geminiiii"
+name: "🚚 Manual Backend Deploy"
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
           - host24-backend
           - host24-frontend
           - host24-zip
-          - DESKTOP-IUAAE04       # <--- Added Here
+          - DESKTOP-IUAAE04
           - AWS_Staging
           - AWS_PROD_01
           - AWS_PROD_02
@@ -51,12 +51,14 @@ permissions:
 
 jobs:
   deploy:
-    # Added "DESKTOP-IUAAE04" to the JSON mapping below
     runs-on: ${{ fromJson('{"host24-backend":["self-hosted","Windows","X64","host24","backend"],"host24-frontend":["self-hosted","Windows","X64","host24","frontend"],"host24-zip":["self-hosted","Windows","X64","host24","zip"],"DESKTOP-IUAAE04":["self-hosted","Windows","X64","DESKTOP-IUAAE04"],"AWS_Staging":["self-hosted","Windows","X64","AWS_Staging"],"AWS_PROD_01":["self-hosted","Windows","X64","AWS_PROD_01"],"AWS_PROD_02":["self-hosted","Windows","X64","AWS_PROD_02"],"AWS_PROD_03":["self-hosted","Windows","X64","AWS_PROD_03"],"AWS_PROD_04":["self-hosted","Windows","X64","AWS_PROD_04"],"AWS_PROD_05":["self-hosted","Windows","X64","AWS_PROD_05"]}')[github.event.inputs.host] }}
     steps:
 
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
+
+      # Note: GitHub CLI steps commented out as per your previous file
+      # If you need them back, uncomment them here.
 
       # - name: "⚙️ Ensure GitHub CLI Installed"
       #   shell: powershell
@@ -107,7 +109,7 @@ jobs:
       #     if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
       #     New-Item -ItemType Directory -Path $extractRoot | Out-Null
 
-      #     # Extract each ZIP into its own folder (Using logic from Frontend.yml)
+      #     # Extract each ZIP into its own folder
       #     $zips = Get-ChildItem -Path $src -Filter *.zip
       #     foreach ($zip in $zips) {
       #       # Clean the folder name (remove release-V... prefix)
@@ -124,7 +126,6 @@ jobs:
       #     Write-Host "✅ Extracted all ZIPs into $extractRoot"
       #     echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
-      
       - name: "🚀 Deploy to Domain(s)"
         id: deploy
         shell: powershell
@@ -137,7 +138,6 @@ jobs:
           $type       = "${{ github.event.inputs.app_type }}"
           $root       = "${{ steps.extract.outputs.extract_root }}"
 
-          # Define logic for where things go
           $deployMap = @{
             "ag-app"              = "AG"
             "web-arborgold-crew"  = "Crew"
@@ -166,7 +166,6 @@ jobs:
             $pool = $domain
             $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
 
-            # 1. Stop Pool
             if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { 
               Stop-WebAppPool $pool 
             }
@@ -199,32 +198,27 @@ jobs:
 
                 if ($shouldDeploy) {
                    $finalDest = Join-Path $httpdocs $targetSubFolder
-                   
                    Write-Host "📂 Deploying [$folderName] → [$finalDest]"
-                   
                    if (-not (Test-Path $finalDest)) { New-Item -ItemType Directory -Path $finalDest -Force | Out-Null }
-                   
                    Copy-Item "$($folder.FullName)\*" -Destination $finalDest -Recurse -Force -ErrorAction Stop
                 }
               }
               $success += $domain
             }
             catch {
-              # ✅ Fixed: formatted variable safely
               Write-Error "❌ Failed $($domain): $_"
               $failed += $domain
             }
 
-            # 2. Start Pool (Recovery or Finish)
             if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
                 Start-WebAppPool $pool 
             }
           }
 
-          # Full Restart if requested
           if ($restart -eq "true") { iisreset /restart }
 
           echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT
+
       - name: "🧹 Cleanup"
         if: always()
         shell: powershell
