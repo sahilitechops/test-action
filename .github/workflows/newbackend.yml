@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: "⚙️ Ensure GitHub CLI Installed"
-        shell: pwsh
+        shell: powershell
         run: |
           if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
             Write-Host "📦 Installing GitHub CLI..."
@@ -79,7 +79,7 @@ jobs:
 
       - name: "🧾 Download ZIP Assets"
         id: download
-        shell: pwsh
+        shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -98,7 +98,7 @@ jobs:
 
       - name: "📦 Extract ZIPs (Separately)"
         id: extract
-        shell: pwsh
+        shell: powershell
         run: |
           $src = "${{ steps.download.outputs.download_dir }}"
           $extractRoot = "$PWD\deploy"
@@ -126,7 +126,7 @@ jobs:
 
       - name: "🚀 Deploy to Domain(s)"
         id: deploy
-        shell: pwsh
+        shell: powershell
         run: |
           Import-Module WebAdministration
 
@@ -240,7 +240,7 @@ jobs:
           echo "success_domains=$($success -join ',')" >> $env:GITHUB_OUTPUT
       - name: "🧹 Cleanup"
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
           Remove-Item "$PWD/release_zips" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item "$PWD/deploy" -Recurse -Force -ErrorAction SilentlyContinue
