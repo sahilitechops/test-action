@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Deploy test"
+name: "🚚 Manual Backend Deploy"
 
 on:
   workflow_dispatch:
@@ -57,74 +57,65 @@ jobs:
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
 
-      # Note: GitHub CLI steps commented out as per your previous file
-      # If you need them back, uncomment them here.
+      - name: "⚙️ Ensure GitHub CLI Installed"
+        shell: powershell
+        run: |
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+            Write-Host "📦 Installing GitHub CLI..."
+            $version = "2.56.0"
+            $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
+            $zip = "$env:TEMP\ghcli.zip"
+            $dest = "$env:ProgramData\ghcli"
+            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            Expand-Archive $zip $dest -Force
+            $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
+            echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
+            & "$($exe.FullName)" --version
+          } else {
+            Write-Host "✅ GH CLI exists"
+          }
 
-      # - name: "⚙️ Ensure GitHub CLI Installed"
-      #   shell: powershell
-      #   run: |
-      #     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-      #       Write-Host "📦 Installing GitHub CLI..."
-      #       $version = "2.56.0"
-      #       $url = "https://github.com/cli/cli/releases/download/v$version/gh_${version}_windows_amd64.zip"
-      #       $zip = "$env:TEMP\ghcli.zip"
-      #       $dest = "$env:ProgramData\ghcli"
-      #       if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-      #       Invoke-WebRequest -Uri $url -OutFile $zip
-      #       Expand-Archive $zip $dest -Force
-      #       $exe = Get-ChildItem $dest -Recurse -Filter gh.exe | Select-Object -First 1
-      #       echo $exe.DirectoryName | Out-File $env:GITHUB_PATH -Append
-      #       & "$($exe.FullName)" --version
-      #     } else {
-      #       Write-Host "✅ GH CLI exists"
-      #     }
+      - name: "🧾 Download ZIP Assets"
+        id: download
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag="${{ github.event.inputs.release_tag }}"
+          Write-Host "📥 Downloading Release ZIPs for $tag..."
+          gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
 
-      # - name: "🧾 Download ZIP Assets"
-      #   id: download
-      #   shell: powershell
-      #   env:
-      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      #   run: |
-      #     $tag="${{ github.event.inputs.release_tag }}"
-      #     Write-Host "📥 Downloading Release ZIPs for $tag..."
-      #     gh release download $tag --repo "${{ github.repository }}" --pattern "*.zip" --clobber
+          $downloadDir="$PWD/release_zips"
+          if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
+          New-Item -ItemType Directory -Path $downloadDir | Out-Null
+          Move-Item *.zip $downloadDir -Force
 
-      #     $downloadDir="$PWD/release_zips"
-      #     if (Test-Path $downloadDir) { Remove-Item -Recurse -Force $downloadDir }
-      #     New-Item -ItemType Directory -Path $downloadDir | Out-Null
-      #     Move-Item *.zip $downloadDir -Force
+          $count=(Get-ChildItem $downloadDir "*.zip").Count
+          if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
+          echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
 
-      #     $count=(Get-ChildItem $downloadDir "*.zip").Count
-      #     if ($count -eq 0) { Write-Error "❌ No ZIP files found"; exit 1 }
-      #     echo "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
-
-      # - name: "📦 Extract ZIPs (Separately)"
-      #   id: extract
-      #   shell: powershell
-      #   run: |
-      #     $src = "${{ steps.download.outputs.download_dir }}"
-      #     $extractRoot = "$PWD\deploy"
+      - name: "📦 Extract ZIPs (Separately)"
+        id: extract
+        shell: powershell
+        run: |
+          $src = "${{ steps.download.outputs.download_dir }}"
+          $extractRoot = "$PWD\deploy"
           
-      #     # Clean previous
-      #     if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
-      #     New-Item -ItemType Directory -Path $extractRoot | Out-Null
+          if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+          New-Item -ItemType Directory -Path $extractRoot | Out-Null
 
-      #     # Extract each ZIP into its own folder
-      #     $zips = Get-ChildItem -Path $src -Filter *.zip
-      #     foreach ($zip in $zips) {
-      #       # Clean the folder name (remove release-V... prefix)
-      #       $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
-            
-      #       # If the zip doesn't have the prefix, just use the BaseName
-      #       if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = $zip.BaseName }
+          $zips = Get-ChildItem -Path $src -Filter *.zip
+          foreach ($zip in $zips) {
+            $folderName = ($zip.BaseName -replace 'release-V\d+\.\d+\.\d+-', '')
+            if ([string]::IsNullOrWhiteSpace($folderName)) { $folderName = $zip.BaseName }
+            $dest = Join-Path $extractRoot $folderName
+            Write-Host "📦 Extracting $($zip.Name) → $dest"
+            Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
+          }
 
-      #       $dest = Join-Path $extractRoot $folderName
-      #       Write-Host "📦 Extracting $($zip.Name) → $dest"
-      #       Expand-Archive -Path $zip.FullName -DestinationPath $dest -Force
-      #     }
-
-      #     Write-Host "✅ Extracted all ZIPs into $extractRoot"
-      #     echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
+          Write-Host "✅ Extracted all ZIPs into $extractRoot"
+          echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
       - name: "🚀 Deploy to Domain(s)"
         id: deploy
@@ -139,16 +130,10 @@ jobs:
           $root       = "${{ steps.extract.outputs.extract_root }}"
 
           $deployMap = @{
-            "ag-app"              = "AG"
-            "web-arborgold-crew"  = "Crew"
-            "e-proposal"          = "EProposal"
-            "e-invoice"           = "EInvoice"
-            "e-statement"         = "EStatement"
+            "ag-app" = "AG"; "web-arborgold-crew" = "Crew"; "e-proposal" = "EProposal"; "e-invoice" = "EInvoice"; "e-statement" = "EStatement"
           }
 
-          if ([string]::IsNullOrWhiteSpace($rawDomains)) {
-             Write-Error "❌ ERROR: No domain provided."; exit 1 
-          }
+          if ([string]::IsNullOrWhiteSpace($rawDomains)) { Write-Error "❌ ERROR: No domain provided."; exit 1 }
 
           $domains = $rawDomains.Split(",") | ForEach-Object { $_.Trim() }
           if (-not [string]::IsNullOrWhiteSpace($rawExclude)) {
@@ -160,19 +145,15 @@ jobs:
 
           $success = @(); $failed = @()
 
-          # --- MAIN LOOP ---
           foreach ($domain in $domains) {
             Write-Host "`n🚀 Deploying to $domain"
             $pool = $domain
             $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
 
-            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { 
-              Stop-WebAppPool $pool 
-            }
+            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { Stop-WebAppPool $pool }
 
             try {
               $extractedFolders = Get-ChildItem -Path $root -Directory
-
               foreach ($folder in $extractedFolders) {
                 $folderName = $folder.Name
                 $targetSubFolder = ""
@@ -180,20 +161,12 @@ jobs:
 
                 if ($deployMap.ContainsKey($folderName)) {
                    $targetSubFolder = $deployMap[$folderName]
-                   if ($type -eq "frontend" -or $type -eq "both") {
-                     $shouldDeploy = $true
-                   } else {
-                     Write-Host "⏭️ Skipping Frontend artifact: $folderName (Type is $type)"
-                   }
-                }
-                else {
+                   if ($type -eq "frontend" -or $type -eq "both") { $shouldDeploy = $true }
+                   else { Write-Host "⏭️ Skipping Frontend artifact: $folderName" }
+                } else {
                    $targetSubFolder = "AG"
-                   if ($type -eq "backend" -or $type -eq "both") {
-                     $shouldDeploy = $true
-                     Write-Host "ℹ️ Identified '$folderName' as Backend artifact."
-                   } else {
-                     Write-Host "⏭️ Skipping Backend artifact: $folderName (Type is $type)"
-                   }
+                   if ($type -eq "backend" -or $type -eq "both") { $shouldDeploy = $true; Write-Host "ℹ️ Identified '$folderName' as Backend." }
+                   else { Write-Host "⏭️ Skipping Backend artifact: $folderName" }
                 }
 
                 if ($shouldDeploy) {
@@ -204,15 +177,12 @@ jobs:
                 }
               }
               $success += $domain
-            }
-            catch {
+            } catch {
               Write-Error "❌ Failed $($domain): $_"
               $failed += $domain
             }
 
-            if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
-                Start-WebAppPool $pool 
-            }
+            if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { Start-WebAppPool $pool }
           }
 
           if ($restart -eq "true") { iisreset /restart }
