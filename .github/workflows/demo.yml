@@ -1,0 +1,97 @@
+name: Update Hosts File on Windows Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      domains_to_comment:
+        description: 'List of domains to comment out (separated by comma or new line)'
+        required: true
+        default: 'example.com, test.api.local'
+        type: string
+
+jobs:
+  modify-hosts:
+    runs-on: DESKTOP-IUAAE04
+    
+    steps:
+      - name: Modify Hosts File
+        shell: powershell
+        env:
+          DOMAINS_INPUT: ${{ inputs.domains_to_comment }}
+        run: |
+          # --- Configuration ---
+          $hostsPath = "C:\Windows\System32\drivers\etc\hosts"
+          
+          # Process the input string (Handling commas or newlines)
+          $dnsList = $env:DOMAINS_INPUT -split "[,`n]" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+          
+          Write-Host "Targeting the following domains: $($dnsList -join ', ')"
+          
+          # Backup hosts file
+          $backupPath = "$hostsPath.bak"
+          Copy-Item $hostsPath $backupPath -Force
+          Write-Host "Backup created: $backupPath"
+          Write-Host ""
+          
+          # Load hosts file
+          $hostsContent = Get-Content $hostsPath
+          $updatedLines = @()
+          
+          # Counters
+          $totalLines = $hostsContent.Count
+          $commentedLines = 0
+          $uncommentedLines = 0
+          $matchedDomains = 0
+          $lineNumber = 0
+          
+          foreach ($line in $hostsContent) {
+              $lineNumber++
+              $trim = $line.Trim()
+              $match = $false
+              
+              # Skip empty lines or lines that are already pure comments
+              if ([string]::IsNullOrWhiteSpace($trim)) {
+                  $updatedLines += $line
+                  continue
+              }
+
+              foreach ($domain in $dnsList) {
+                  # Logic: Check if the line contains the domain
+                  if ($trim -match $domain) {
+                      # Check if already commented to avoid double commenting ##
+                      if (-not ($trim.StartsWith("#"))) {
+                          $match = $true
+                          $matchedDomains++
+                          Write-Host "→ Commenting (Match: $domain) | Line $lineNumber | $trim"
+                          break
+                      }
+                  }
+              }
+          
+              if ($match) {
+                  # Add the comment hash
+                  $new = "# " + $trim
+                  $updatedLines += $new
+                  $commentedLines++
+              }
+              else {
+                  $updatedLines += $line
+                  $uncommentedLines++
+              }
+          }
+          
+          # Write back to hosts file
+          Set-Content -Path $hostsPath -Value ($updatedLines -join "`r`n") -Force -Encoding UTF8
+          
+          # Summary Report
+          Write-Host "----------------------------------------"
+          Write-Host "SUMMARY"
+          Write-Host "----------------------------------------"
+          Write-Host "Total lines processed: $totalLines"
+          Write-Host "Newly Commented lines: $commentedLines"
+          Write-Host "Domain entries hit:    $matchedDomains"
+          Write-Host "----------------------------------------"
+          
+          # Debug: Print the new file content to verify (Optional - remove if file is huge)
+          Write-Host "Verifying new content (First 20 lines):"
+          Get-Content $hostsPath -TotalCount 20
