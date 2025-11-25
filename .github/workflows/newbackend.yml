@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Deploy"
+name: "🚚 Manual Backend Deploy test"
 
 on:
   workflow_dispatch:
