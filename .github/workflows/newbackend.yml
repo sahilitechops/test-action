@@ -1,4 +1,4 @@
-name: "🚚 Manual Backend Deploy (from Release ZIP)"
+name: "🚚 Manual Backend Geminiiii"
 
 on:
   workflow_dispatch:
