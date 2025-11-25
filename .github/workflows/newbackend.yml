@@ -124,6 +124,7 @@ jobs:
       #     Write-Host "✅ Extracted all ZIPs into $extractRoot"
       #     echo "extract_root=$extractRoot" >> $env:GITHUB_OUTPUT
 
+      
       - name: "🚀 Deploy to Domain(s)"
         id: deploy
         shell: powershell
@@ -137,7 +138,6 @@ jobs:
           $root       = "${{ steps.extract.outputs.extract_root }}"
 
           # Define logic for where things go
-          # Keys match the extracted folder names. Values match the destination subfolder in httpdocs.
           $deployMap = @{
             "ag-app"              = "AG"
             "web-arborgold-crew"  = "Crew"
@@ -146,9 +146,6 @@ jobs:
             "e-statement"         = "EStatement"
           }
 
-          # --------------------------
-          # VALIDATION
-          # --------------------------
           if ([string]::IsNullOrWhiteSpace($rawDomains)) {
              Write-Error "❌ ERROR: No domain provided."; exit 1 
           }
@@ -163,19 +160,18 @@ jobs:
 
           $success = @(); $failed = @()
 
-          # --------------------------
-          # DEPLOY LOOP
-          # --------------------------
+          # --- MAIN LOOP ---
           foreach ($domain in $domains) {
             Write-Host "`n🚀 Deploying to $domain"
             $pool = $domain
             $httpdocs = "D:\inetpub\vhosts\$domain\httpdocs"
 
             # 1. Stop Pool
-            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { Stop-WebAppPool $pool }
+            if ($restart -eq "true" -and (Test-Path "IIS:\AppPools\$pool")) { 
+              Stop-WebAppPool $pool 
+            }
 
             try {
-              # Get all extracted folders
               $extractedFolders = Get-ChildItem -Path $root -Directory
 
               foreach ($folder in $extractedFolders) {
@@ -183,12 +179,8 @@ jobs:
                 $targetSubFolder = ""
                 $shouldDeploy = $false
 
-                # --- LOGIC: Determine Target and if we should deploy based on app_type ---
-
                 if ($deployMap.ContainsKey($folderName)) {
-                   # === THIS IS A FRONTEND FOLDER ===
                    $targetSubFolder = $deployMap[$folderName]
-                   
                    if ($type -eq "frontend" -or $type -eq "both") {
                      $shouldDeploy = $true
                    } else {
@@ -196,11 +188,7 @@ jobs:
                    }
                 }
                 else {
-                   # === THIS IS (PRESUMABLY) THE BACKEND FOLDER ===
-                   # Logic: If it's not in the map, it's likely the backend ZIP content
-                   # Backend usually goes to AG
                    $targetSubFolder = "AG"
-                   
                    if ($type -eq "backend" -or $type -eq "both") {
                      $shouldDeploy = $true
                      Write-Host "ℹ️ Identified '$folderName' as Backend artifact."
@@ -209,7 +197,6 @@ jobs:
                    }
                 }
 
-                # --- EXECUTE COPY ---
                 if ($shouldDeploy) {
                    $finalDest = Join-Path $httpdocs $targetSubFolder
                    
@@ -220,15 +207,15 @@ jobs:
                    Copy-Item "$($folder.FullName)\*" -Destination $finalDest -Recurse -Force -ErrorAction Stop
                 }
               }
-              
               $success += $domain
             }
             catch {
+              # ✅ Fixed: formatted variable safely
               Write-Error "❌ Failed $($domain): $_"
               $failed += $domain
             }
 
-            # 2. Start Pool
+            # 2. Start Pool (Recovery or Finish)
             if ((Test-Path "IIS:\AppPools\$pool") -and ($restart -eq "true" -or $failed -contains $domain)) { 
                 Start-WebAppPool $pool 
             }
